@@ -13,6 +13,7 @@ import (
 	"github.com/gorilla/mux"
 	"github.com/gorilla/securecookie"
 	"github.com/knieriem/markdown"
+	. "github.com/tenntenn/isucontools"
 	"html/template"
 	"io"
 	"io/ioutil"
@@ -21,7 +22,6 @@ import (
 	_ "net/http/pprof"
 	"net/url"
 	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -36,16 +36,6 @@ const (
 	markdownCommand = "../bin/markdown"
 	memcachedServer = "localhost:11211"
 )
-
-func must(err error) {
-	if err != nil {
-		log.Panic(err)
-	}
-}
-
-func sql_escape(s string) string {
-	return strings.Replace(s, "'", "''", -1)
-}
 
 type Config struct {
 	Database struct {
@@ -235,7 +225,9 @@ func main() {
 	r.HandleFunc("/memo", memoPostHandler).Methods("POST")
 	r.HandleFunc("/recent/{page:[0-9]+}", recentHandler)
 	r.HandleFunc("/__reset__", resetHandler)
-	initStaticFiles(r, "public")
+	InitStaticFiles(func(urlpath string, handler http.Handler) {
+		r.Handle(urlpath, handler)
+	}, "public")
 	http.Handle("/", r)
 	log.Fatal(http.ListenAndServe(listenAddr, nil))
 }
@@ -592,7 +584,7 @@ func memoPostHandler(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().Format("2006-01-02 15:04:05")
 	result, err := DB.Exec(
 		fmt.Sprintf("INSERT INTO memos (user, content, is_private, created_at) VALUES (%d, '%s', %d, '%s')",
-			user.Id, sql_escape(r.FormValue("content")), isPrivate, now))
+			user.Id, SqlEscape(r.FormValue("content")), isPrivate, now))
 	if err != nil {
 		serverError(w, err)
 		return
@@ -619,7 +611,7 @@ func initialLoad() {
 	defer M.lock.Unlock()
 
 	rows, err := DB.Query("SELECT id, username, password, salt FROM users")
-	must(err)
+	Must(err)
 	for rows.Next() {
 		user := &User{}
 		rows.Scan(&user.Id, &user.Username, &user.Password, &user.Salt)
@@ -631,7 +623,7 @@ func initialLoad() {
 	M.publicMemoCount = 0
 	M.maxMemoId = 0
 	rows, err = DB.Query("SELECT id, user, content, is_private, created_at, updated_at FROM memos")
-	must(err)
+	Must(err)
 	for rows.Next() {
 		memo := &Memo{}
 		rows.Scan(&memo.Id, &memo.User, &memo.Content, &memo.IsPrivate, &memo.CreatedAt, &memo.UpdatedAt)
@@ -640,41 +632,4 @@ func initialLoad() {
 		addMemo(memo)
 	}
 	rows.Close()
-}
-
-func initStaticFiles(r *mux.Router, prefix string) {
-	wf := func(path string, info os.FileInfo, err error) error {
-		log.Println(path, info, err)
-		if path == prefix {
-			return nil
-		}
-		if info.IsDir() {
-			return nil
-		}
-		urlpath := path[len(prefix):]
-		if urlpath[0] != '/' {
-			urlpath = "/" + urlpath
-		}
-		log.Println("Registering", urlpath, path)
-		f, err := os.Open(path)
-		if err != nil {
-			log.Println(err)
-			return nil
-		}
-		content := make([]byte, info.Size())
-		f.Read(content)
-		f.Close()
-
-		handler := func(w http.ResponseWriter, r *http.Request) {
-			if path[len(path)-4:] == ".css" {
-				w.Header().Set("Content-Type", "text/css")
-			} else if path[len(path)-3:] == ".js" {
-				w.Header().Set("Content-Type", "application/javascript")
-			}
-			w.Write(content)
-		}
-		r.HandleFunc(urlpath, handler)
-		return nil
-	}
-	filepath.Walk(prefix, wf)
 }
